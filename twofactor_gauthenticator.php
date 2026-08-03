@@ -74,14 +74,13 @@ class twofactor_gauthenticator extends rcube_plugin
         $this->include_script('twofactor_gauthenticator.js');
         $this->include_script('qrcode.min.js');
 
-        // set client IP address
-        if (array_key_exists('HTTP_X_FORWARDED_FOR', $_SERVER)){
-            $this->ip_client = $_SERVER["HTTP_X_FORWARDED_FOR"];  
-        }else if (array_key_exists('REMOTE_ADDR', $_SERVER)) { 
-            $this->ip_client = $_SERVER["REMOTE_ADDR"]; 
-        }else if (array_key_exists('HTTP_CLIENT_IP', $_SERVER)) {
-            $this->ip_client = $_SERVER["HTTP_CLIENT_IP"]; 
-        } 
+        // This installation is expected to be reached directly, without a
+        // trusted reverse proxy. Forwarding headers are client-controlled and
+        // must never be used for a 2FA bypass decision.
+        $this->ip_client = filter_var(
+            $_SERVER['REMOTE_ADDR'] ?? '',
+            FILTER_VALIDATE_IP
+        ) ?: '';
         // settings we will export to the form javascript
         $this_output = $this->api->output;
         if ($this_output) {
@@ -256,7 +255,10 @@ class twofactor_gauthenticator extends rcube_plugin
                     $this->__exitSession();
                 }
             } // we're into some task but marked with login...
-            else if ($rcmail->task !== 'login' && !$_SESSION['twofactor_gauthenticator_2FA_login'] >= $_SESSION['twofactor_gauthenticator_login']) {
+            else if (
+                $rcmail->task !== 'login' &&
+                empty($_SESSION['twofactor_gauthenticator_2FA_login'])
+            ) {
                 $this->__exitSession();
             }
         } else if (
@@ -416,7 +418,7 @@ class twofactor_gauthenticator extends rcube_plugin
         $i = 0;
         for ($i = 0; $i < $this->_number_recovery_codes; $i++) {
             $value = isset($data['recovery_codes'][$i]) ? $data['recovery_codes'][$i] : '';
-            $html_recovery_codes .= '<div class="col-md-2"><input type="password" name="2FA_recovery_codes[]" value="' . $value . '" maxlength="10" class="form-control" readonly></div>';
+            $html_recovery_codes .= '<div class="col-md-2"><input type="password" name="2FA_recovery_codes[]" value="' . rcube::Q($value) . '" maxlength="10" class="form-control" readonly></div>';
         }
         if ($data['secret']) {
             $html_recovery_codes .= '<input type="button" class="button mainaction btn btn-primary mx-2" id="2FA_show_recovery_codes" value="' . $this->gettext('show_recovery_codes') . '">';
@@ -501,9 +503,8 @@ class twofactor_gauthenticator extends rcube_plugin
     // used with ajax
     function checkCode()
     {
-        $code = rcube_utils::get_input_value('code', rcube_utils::INPUT_GET);
-        //$secret = rcube_utils::get_input_value('secret', rcube_utils::INPUT_GET);
-        $secret = rcube_utils::get_input_value('secret', rcube_utils::INPUT_GET);
+        $code = rcube_utils::get_input_value('code', rcube_utils::INPUT_POST);
+        $secret = rcube_utils::get_input_value('secret', rcube_utils::INPUT_POST);
 
         if (self::__checkCode($code, $secret)) {
             echo $this->gettext('code_ok');
@@ -558,7 +559,8 @@ class twofactor_gauthenticator extends rcube_plugin
     private function __isRecoveryCode($code)
     {
         $prefs = self::__get2FAconfig();
-        return in_array($code, $prefs['recovery_codes']);
+        return is_array($prefs['recovery_codes'] ?? null)
+            && in_array($code, $prefs['recovery_codes'], true);
     }
 
     private function __consumeRecoveryCode($code)
@@ -599,6 +601,10 @@ class twofactor_gauthenticator extends rcube_plugin
     // returns boolean
     private function __checkCode($code, $secret = null)
     {
+        if (!is_string($code) || !preg_match('/^\d{6}$/', $code)) {
+            return false;
+        }
+
         $ga = new PHPGangsta_GoogleAuthenticator();
         return $ga->verifyCode(($secret ? $secret : self::__getSecret()), $code, 2);    // 2 = 2*30sec clock tolerance
     }
@@ -618,7 +624,7 @@ class twofactor_gauthenticator extends rcube_plugin
 
         if ($set) {
             $expires = time() + $days2remember_device; // 30 days from now
-            $rand = mt_rand();
+            $rand = bin2hex(random_bytes(16));
             $signature = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'), TRUE);
             $plain_content = sprintf("%d:%d:%s", $expires, $rand, $signature);
             $encrypted_content = openssl_encrypt($plain_content, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
@@ -639,13 +645,7 @@ class twofactor_gauthenticator extends rcube_plugin
                         list($expires, $rand, $signature) = explode(':', $plain_content, 3);
                         if ($expires > $now && ($expires - $now) <= $days2remember_device) {
                             $signature_verification = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'), TRUE);
-                            // constant time
-                            $cmp = strlen($signature) ^ strlen($signature_verification);
-                            $signature = $signature ^ $signature_verification;
-                            for ($i = 0; $i < strlen($signature); $i++) {
-                                $cmp += ord($signature [$i]);
-                            }
-                            return ($cmp === 0);
+                            return hash_equals($signature_verification, $signature);
                         }
                     }
                 }

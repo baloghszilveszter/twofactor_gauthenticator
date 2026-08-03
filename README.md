@@ -283,3 +283,41 @@ Password:xxxxxxxxx
 Expected "settings" task, something went wrong
 ``` 
 
+## Local security regression test
+
+The repository includes a dependency-free regression test for the TOTP
+implementation, CIDR matching, the 2FA session gate, trusted client IP
+handling, and remember-device signature verification.
+
+Run it with PHP 8.0 or newer:
+
+```sh
+php tests/security_regression.php
+```
+
+If PHP is not installed locally, run it in Docker:
+
+```sh
+docker run --rm -v "$PWD":/src -w /src php:8.2-cli php tests/security_regression.php
+```
+
+The plugin must still be tested against a real Roundcube 1.7 installation;
+the regression test does not replace an integration test.
+
+## Isolated Roundcube 1.7.1 test environment
+
+The `tests/docker` directory contains an isolated Roundcube 1.7.1 and
+MariaDB environment. It binds only to `127.0.0.1:18080` and does not connect
+to any production mail service.
+
+```sh
+cd tests/docker
+docker compose up -d
+open http://127.0.0.1:18080/installer
+```
+
+When finished:
+
+```sh
+docker compose down -v
+```

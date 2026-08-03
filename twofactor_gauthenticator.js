@@ -89,8 +89,13 @@ if (window.rcmail) {
 		}
 
 		function validate2FApin() {
-			let url = "./?_action=plugin.twofactor_gauthenticator-checkcode&code=" +$('#2FA_code_to_check').val() + '&secret='+$('#2FA_secret').val();
-			$.post(url, function(data){
+			$.post('./', {
+				_task: 'settings',
+				_action: 'plugin.twofactor_gauthenticator-checkcode',
+				_token: rcmail.env.request_token,
+				code: $('#2FA_code_to_check').val(),
+				secret: $('#2FA_secret').val()
+			}, function(data){
 				alert(data);
 				if(data === rcmail.gettext('code_ok', 'twofactor_gauthenticator')) {
 					$('#2FA_setup_fields').prev().removeAttr('disabled');

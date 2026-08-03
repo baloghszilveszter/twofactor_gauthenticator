@@ -1,0 +1,41 @@
+services:
+  db:
+    image: mariadb:10.11
+    environment:
+      MARIADB_DATABASE: roundcubemail
+      MARIADB_USER: roundcube
+      MARIADB_PASSWORD: roundcube-test-password
+      MARIADB_ROOT_PASSWORD: root-test-password
+    volumes:
+      - roundcube-test-db:/var/lib/mysql
+    networks:
+      - roundcube-test
+
+  roundcube:
+    image: roundcube/roundcubemail:1.7.1-apache
+    depends_on:
+      - db
+    environment:
+      ROUNDCUBEMAIL_DB_TYPE: mysql
+      ROUNDCUBEMAIL_DB_HOST: db
+      ROUNDCUBEMAIL_DB_USER: roundcube
+      ROUNDCUBEMAIL_DB_PASSWORD: roundcube-test-password
+      ROUNDCUBEMAIL_DB_NAME: roundcubemail
+      ROUNDCUBEMAIL_DEFAULT_HOST: tls://imap.invalid
+      ROUNDCUBEMAIL_SMTP_SERVER: tls://smtp.invalid
+      ROUNDCUBEMAIL_SMTP_PORT: 587
+    ports:
+      - "127.0.0.1:18080:80"
+    volumes:
+      - ../../:/var/www/html/plugins/twofactor_gauthenticator:ro
+      - ./config/config.inc.php:/var/roundcube/config/config.inc.php:ro
+      - ./config/twofactor_gauthenticator.inc.php:/var/roundcube/config/twofactor_gauthenticator.inc.php:ro
+    networks:
+      - roundcube-test
+
+volumes:
+  roundcube-test-db:
+
+networks:
+  roundcube-test:
+    name: twofactor-roundcube-test
