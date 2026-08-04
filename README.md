@@ -321,3 +321,21 @@ When finished:
 ```sh
 docker compose down -v
 ```
+
+## Targeted functional security tests
+
+The plugin was also tested against the isolated Roundcube environment with a
+dedicated test mailbox. The following flows passed:
+
+- an invalid TOTP code is rejected and the 2FA challenge remains active;
+- a recovery code is accepted once;
+- reusing the same recovery code is rejected;
+- enabling and disabling 2FA through the authenticated settings flow works;
+- normal login and message sending continue to work with 2FA disabled.
+
+The “remember this device for 7 days” option successfully skips the challenge
+for the current authenticated session. A subsequent login after logout still
+requested a TOTP code in the tested browser session, so this behavior remains
+an integration item to investigate before relying on it in production.
+
+These checks are targeted integration tests, not a complete security audit.
