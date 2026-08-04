@@ -85,8 +85,8 @@ class twofactor_gauthenticator extends rcube_plugin
         $this_output = $this->api->output;
         if ($this_output) {
             $this->api->output->set_env('allow_save_device', $rcmail->config->get('allow_save_device', true));
-            // default as 7 days to remember the device
             $this->api->output->set_env('days_to_remember_device', $rcmail->config->get('days_to_remember_device', 7));
+            $this->api->output->set_env('remember_device_options', $this->__rememberDeviceOptions());
             $this->api->output->set_env('twofactor_formfield_as_password', $rcmail->config->get('twofactor_formfield_as_password', false));
         }
     }
@@ -244,7 +244,8 @@ class twofactor_gauthenticator extends rcube_plugin
                     }
 
                     if (rcube_utils::get_input_value('_remember_2FA', rcube_utils::INPUT_POST) === 'yes') {
-                        $this->__cookie($set = true);
+                        $remember_days = (int) rcube_utils::get_input_value('_remember_2FA_days', rcube_utils::INPUT_POST);
+                        $this->__cookie($set = true, $remember_days);
                     }
 
                     $this->__goingRoundcubeTask('mail');
@@ -611,7 +612,23 @@ class twofactor_gauthenticator extends rcube_plugin
 
 
     // remember option by https://github.com/corrideat/
-    private function __cookie($set = TRUE)
+    private function __rememberDeviceOptions()
+    {
+        $rcmail = rcmail::get_instance();
+        $options = $rcmail->config->get('remember_device_options', array(7, 30, 180));
+        if (!is_array($options)) {
+            $options = array(7, 30, 180);
+        }
+
+        $options = array_values(array_unique(array_filter(array_map('intval', $options), function ($days) {
+            return $days >= 1 && $days <= 180;
+        })));
+        sort($options, SORT_NUMERIC);
+
+        return $options ?: array(7);
+    }
+
+    private function __cookie($set = TRUE, $remember_days = null)
     {
         $rcmail = rcmail::get_instance();
         $user_agent = hash_hmac('md5', filter_input(INPUT_SERVER, 'USER_AGENT') ?: "\0\0\0\0\0", $rcmail->config->get('des_key'));
@@ -619,8 +636,15 @@ class twofactor_gauthenticator extends rcube_plugin
         $iv = hash_hmac('md5', implode("\3\2\3", array($rcmail->user->data['username'], $this->__getSecret())), $rcmail->config->get('des_key'), TRUE);
         $name = hash_hmac('md5', $rcmail->user->data['username'], $rcmail->config->get('des_key'));
 
-        // 7 days * hours of a day * an hour
-        $days2remember_device = (int)$rcmail->config->get('days_to_remember_device') * 24 * 3600;
+        $remember_options = $this->__rememberDeviceOptions();
+        $default_days = (int)$rcmail->config->get('days_to_remember_device', 7);
+        if (!in_array($default_days, $remember_options, true)) {
+            $default_days = $remember_options[0];
+        }
+        $days2remember_device = $set && in_array((int)$remember_days, $remember_options, true)
+            ? (int)$remember_days
+            : $default_days;
+        $days2remember_device *= 24 * 3600;
 
         if ($set) {
             $expires = time() + $days2remember_device; // 30 days from now
@@ -648,7 +672,8 @@ class twofactor_gauthenticator extends rcube_plugin
                     if ($plain_content !== false) {
                         $now = time();
                         list($expires, $rand, $signature) = explode(':', $plain_content, 3);
-                        if ($expires > $now && ($expires - $now) <= $days2remember_device) {
+                        $max_days = max($remember_options) * 24 * 3600;
+                        if ($expires > $now && ($expires - $now) <= $max_days) {
                             $signature_verification = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'));
                             return hash_equals($signature_verification, $signature);
                         }

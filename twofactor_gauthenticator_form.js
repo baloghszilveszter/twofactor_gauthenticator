@@ -29,11 +29,15 @@ if (window.rcmail) {
 
     // remember option
     if(rcmail.env.allow_save_device) {
-        var remember_device_msg = rcmail.gettext('dont_ask_me_days', 'twofactor_gauthenticator');
+        var remember_device_msg = rcmail.gettext('remember_device_for', 'twofactor_gauthenticator');
+        var remember_options = rcmail.env.remember_device_options || [rcmail.env.days_to_remember_device || 7];
         proceed_msg = rcmail.gettext('proceed', 'twofactor_gauthenticator');
-        remember_device_msg = remember_device_msg.replace('{DAYS}', rcmail.env.days_to_remember_device);
+        var remember_options_html = '';
+        for(var i = 0; i < remember_options.length; i++) {
+            remember_options_html += '<option value="' + remember_options[i] + '">' + remember_options[i] + ' nap</option>';
+        }
 		    text += '<tr>';
-		    text += '<td class="title" colspan="2"><br /><label for="remember_2FA"><input type="checkbox" id="remember_2FA" name="_remember_2FA" value="yes" /> ' + remember_device_msg + '</label><hr /></td>';
+		    text += '<td class="title" colspan="2"><br /><label for="remember_2FA"><input type="checkbox" id="remember_2FA" name="_remember_2FA" value="yes" /> ' + remember_device_msg + ' <select id="remember_2FA_days" name="_remember_2FA_days">' + remember_options_html + '</select></label><hr /></td>';
 		    text += '</tr>';
 	} else {
         text += '<tr>';

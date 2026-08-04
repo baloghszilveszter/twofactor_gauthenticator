@@ -338,4 +338,9 @@ for the current authenticated session and on a subsequent login after logout.
 The test covered the token persistence fix and a PHP-FPM reload on the isolated
 mail.itbros.email test server.
 
+The remember-device duration can be selected at login from the durations
+allowed by `remember_device_options`. The default configuration offers 7, 30,
+and 180 days, with 7 days selected by default. Values are capped at 180 days;
+an unlimited lifetime is intentionally not supported.
+
 These checks are targeted integration tests, not a complete security audit.

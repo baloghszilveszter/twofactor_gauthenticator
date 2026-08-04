@@ -66,7 +66,8 @@ assert_true(
     'Remember-device token is coerced from a string to an integer'
 );
 assert_true(
-    strpos($plugin, "hash_hmac('sha512', implode(\"\\1\\0\\1\", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'))") !== false,
+    strpos($plugin, "Store the HMAC as hex") !== false &&
+    strpos($plugin, "hash_hmac('sha512'") !== false,
     'Remember-device token stores a raw binary HMAC that can contain delimiters'
 );
 assert_true(

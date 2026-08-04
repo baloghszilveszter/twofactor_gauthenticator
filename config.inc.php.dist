@@ -30,3 +30,4 @@ $rcmail_config['enable_fail_logs'] = false;
 
 // remember days config, 30 days is too much.
 $rcmail_config['days_to_remember_device'] = 7;
+$rcmail_config['remember_device_options'] = array(7, 30, 180);
