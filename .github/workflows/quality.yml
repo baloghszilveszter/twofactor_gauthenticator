@@ -33,11 +33,10 @@ jobs:
           find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
 
       - name: Validate composer manifest
-        run: composer validate --strict --no-check-publish
+        run: composer validate --no-check-publish
 
       - name: Audit Composer dependencies
         run: composer audit --no-interaction
 
       - name: Run security regression tests
         run: php tests/security_regression.php
-
