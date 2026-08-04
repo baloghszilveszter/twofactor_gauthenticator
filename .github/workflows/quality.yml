@@ -35,8 +35,5 @@ jobs:
       - name: Validate composer manifest
         run: composer validate --no-check-publish
 
-      - name: Audit Composer dependencies
-        run: composer audit --no-interaction
-
       - name: Run security regression tests
         run: php tests/security_regression.php

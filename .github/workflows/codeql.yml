@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [php, javascript]
+        language: [javascript, actions]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,4 +30,3 @@ jobs:
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3
-
