@@ -43,7 +43,35 @@ assert_true(
 );
 assert_true(
     strpos($plugin, "INPUT_POST") !== false,
-    '2FA check-code action does not read its secret from POST'
+    '2FA actions do not read POST input'
+);
+assert_true(
+    strpos($plugin, 'preg_match(\'/^\\d{6}$/\', $code)') !== false,
+    'TOTP input is not restricted to six decimal digits'
+);
+assert_true(
+    strpos($plugin, "in_array(\$code, \$prefs['recovery_codes'], true)") !== false,
+    'Recovery codes are not compared strictly'
+);
+assert_true(
+    strpos($plugin, "array_values(array_diff(\$prefs['recovery_codes'], array(\$code)))") !== false,
+    'Recovery codes are not consumed after use'
+);
+assert_true(
+    strpos($plugin, 'random_bytes(16)') !== false,
+    'Remember-device token does not use cryptographically secure randomness'
+);
+assert_true(
+    strpos($plugin, 'hash_equals($signature_verification, $signature)') !== false,
+    'Remember-device cookie does not use constant-time verification'
+);
+assert_true(
+    strpos($plugin, "unset(\$_SESSION['twofactor_gauthenticator_2FA_login'])") !== false,
+    'Logout path does not clear the 2FA session marker'
+);
+assert_true(
+    strpos($plugin, '$_SERVER[\'REMOTE_ADDR\']') !== false,
+    'Client IP handling does not use the server-provided remote address'
 );
 
 fwrite(STDOUT, "OK\n");
