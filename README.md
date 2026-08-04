@@ -334,8 +334,8 @@ dedicated test mailbox. The following flows passed:
 - normal login and message sending continue to work with 2FA disabled.
 
 The “remember this device for 7 days” option successfully skips the challenge
-for the current authenticated session. A subsequent login after logout still
-requested a TOTP code in the tested browser session, so this behavior remains
-an integration item to investigate before relying on it in production.
+for the current authenticated session and on a subsequent login after logout.
+The test covered the token persistence fix and a PHP-FPM reload on the isolated
+mail.itbros.email test server.
 
 These checks are targeted integration tests, not a complete security audit.

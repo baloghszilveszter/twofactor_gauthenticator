@@ -625,8 +625,13 @@ class twofactor_gauthenticator extends rcube_plugin
         if ($set) {
             $expires = time() + $days2remember_device; // 30 days from now
             $rand = bin2hex(random_bytes(16));
-            $signature = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'), TRUE);
-            $plain_content = sprintf("%d:%d:%s", $expires, $rand, $signature);
+            // Store the HMAC as hex so the colon-delimited token cannot be
+            // corrupted by delimiter bytes from a raw binary signature.
+            $signature = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'));
+            // Keep the cryptographically random token intact. It is a
+            // hexadecimal string and must not be coerced to an integer,
+            // otherwise the signature cannot be verified on the next login.
+            $plain_content = sprintf("%d:%s:%s", $expires, $rand, $signature);
             $encrypted_content = openssl_encrypt($plain_content, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
             if ($encrypted_content !== false) {
                 $b64_encrypted_content = strtr(base64_encode($encrypted_content), '+/=', '-_,');
@@ -644,7 +649,7 @@ class twofactor_gauthenticator extends rcube_plugin
                         $now = time();
                         list($expires, $rand, $signature) = explode(':', $plain_content, 3);
                         if ($expires > $now && ($expires - $now) <= $days2remember_device) {
-                            $signature_verification = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'), TRUE);
+                            $signature_verification = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'));
                             return hash_equals($signature_verification, $signature);
                         }
                     }
