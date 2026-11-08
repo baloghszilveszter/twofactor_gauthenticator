@@ -4,7 +4,7 @@
  *
  * This RoundCube plugin adds the 2-step verification(OTP) to the login proccess
  *
- * @version 2.0.0
+ * @version 2.0.1
  * @author Alexandre Espinosa <aemenor@gmail.com>
  *
  * Some ideas and code: Ricardo Signes <rjbs@cpan.org>, Ricardo Iván Vieitez Parra (https://github.com/corrideat), Justin Buchanan (https://github.com/jusbuc2k)
@@ -14,6 +14,7 @@
 require_once 'PHPGangsta/GoogleAuthenticator.php';
 
 require_once 'CIDR.php';
+require_once __DIR__ . '/TwofactorRateLimiter.php';
 
 /**
  * Class twofactor_gauthenticator
@@ -57,6 +58,7 @@ class twofactor_gauthenticator extends rcube_plugin
 
         // hooks
         $this->add_hook('login_after', array($this, 'login_after'));
+        $this->add_hook('startup', array($this, 'check_2FAstartup'));
         $this->add_hook('send_page', array($this, 'check_2FAlogin'));
         $this->add_hook('render_page', array($this, 'popup_msg_enrollment'));
 
@@ -181,6 +183,7 @@ class twofactor_gauthenticator extends rcube_plugin
      */
     function login_after($args)
     {
+        unset($_SESSION['twofactor_gauthenticator_2FA_login']);
         $_SESSION['twofactor_gauthenticator_login'] = time();
 
         $rcmail = rcmail::get_instance();
@@ -215,6 +218,17 @@ class twofactor_gauthenticator extends rcube_plugin
      * @param $p
      * @return mixed
      */
+    // Gate all authenticated requests before action handlers, including AJAX.
+    function check_2FAstartup($args)
+    {
+        $rcmail = rcmail::get_instance();
+        if ($rcmail->user->ID && !in_array($rcmail->task, array('login', 'logout'), true)
+            && empty($_SESSION['twofactor_gauthenticator_2FA_login'])) {
+            $this->check_2FAlogin($args);
+        }
+        return $args;
+    }
+
     function check_2FAlogin($p)
     {
         $rcmail = rcmail::get_instance();
@@ -237,8 +251,11 @@ class twofactor_gauthenticator extends rcube_plugin
             $code = rcube_utils::get_input_value('_code_2FA', rcube_utils::INPUT_POST);
             $remember = rcube_utils::get_input_value('_remember_2FA', rcube_utils::INPUT_POST);
 
-            if ($code) {
-                if (self::__checkCode($code) || self::__isRecoveryCode($code)) {
+            if ($code !== null) {
+                if (!$rcmail->check_request()) {
+                    $this->__exitSession();
+                }
+                if ($this->__verifyLoginCode($code)) {
                     if (self::__isRecoveryCode($code)) {
                         self::__consumeRecoveryCode($code);
                     }
@@ -329,7 +346,7 @@ class twofactor_gauthenticator extends rcube_plugin
 		//
 		// Solution: if user don't have session created by any rendered page, we kick out
 		$config_2FA = self::__get2FAconfig();
-		if(!$_SESSION['twofactor_gauthenticator_2FA_login'] && $config_2FA['activate']) {
+		if (!$rcmail->user->ID || (empty($_SESSION['twofactor_gauthenticator_2FA_login']) && !empty($config_2FA['activate']))) {
 			$this->__exitSession();
 		}
         
@@ -504,10 +521,18 @@ class twofactor_gauthenticator extends rcube_plugin
     // used with ajax
     function checkCode()
     {
+        $rcmail = rcmail::get_instance();
+        $prefs = self::__get2FAconfig();
+        // This endpoint only tests an explicitly supplied enrollment secret.
+        // It must never act as an oracle for the saved secret before 2FA login.
+        if (!$rcmail->user->ID || !$rcmail->check_request() || (!empty($prefs['activate'])
+            && empty($_SESSION['twofactor_gauthenticator_2FA_login']))) {
+            $this->__exitSession();
+        }
         $code = rcube_utils::get_input_value('code', rcube_utils::INPUT_POST);
         $secret = rcube_utils::get_input_value('secret', rcube_utils::INPUT_POST);
 
-        if (self::__checkCode($code, $secret)) {
+        if (is_string($secret) && $secret !== '' && self::__checkCode($code, $secret)) {
             echo $this->gettext('code_ok');
         } else {
             echo $this->gettext('code_ko');
@@ -532,8 +557,34 @@ class twofactor_gauthenticator extends rcube_plugin
         unset($_SESSION['twofactor_gauthenticator_2FA_login']);
 
         $rcmail = rcmail::get_instance();
-        header('Location: ?_task=logout&_token=' . $rcmail->get_request_token());
+        $name = hash_hmac('md5', $rcmail->user->data['username'] ?? '', $rcmail->config->get('des_key'));
+        rcube_utils::setcookie($name, '', time() - 3600);
+        // Destroy the server-side session before sending any redirect.
+        $rcmail->kill_session();
+        header('Location: ?_task=login');
         exit;
+    }
+
+    private function __verifyLoginCode($code)
+    {
+        $rcmail = rcmail::get_instance();
+        try {
+            $directory = $rcmail->config->get('twofactor_rate_limit_dir',
+                rtrim($rcmail->config->get('temp_dir', sys_get_temp_dir()), '/') . '/twofactor-rate-limit');
+            $limiter = new TwofactorRateLimiter($directory);
+            // Stable user ID includes the Roundcube installation; IP changes cannot reset it.
+            $account = INSTALL_PATH . ':' . $rcmail->user->ID;
+            if (!$rcmail->user->ID) {
+                return false;
+            }
+            return $limiter->verify($account, function () use ($code) {
+                return is_string($code) && (self::__checkCode($code) || self::__isRecoveryCode($code));
+            });
+        } catch (Throwable $e) {
+            // Fail closed on unavailable/corrupt storage; never log codes or secrets.
+            rcube::write_log('errors', '2FA verification denied: rate-limit storage unavailable');
+            return false;
+        }
     }
 
     private function __get2FAconfig()

@@ -36,4 +36,6 @@ jobs:
         run: composer validate --no-check-publish
 
       - name: Run security regression tests
-        run: php tests/security_regression.php
+        run: |
+          php tests/security_regression.php
+          php tests/auth_security.php

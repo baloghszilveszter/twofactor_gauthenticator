@@ -1,8 +1,9 @@
 Roundcube Webmail plugin: 2-Factor Authentication
 ==============================================
 
-**Requirement**
-- Roundcube Webmail 1.5.x
+**Requirements**
+- Roundcube Webmail 1.7.0 or newer
+- PHP 8.0 or newer with the OpenSSL extension
 
 **Changelog**
  - fixed UI using bootstrap 4.5.x
@@ -303,6 +304,57 @@ docker run --rm -v "$PWD":/src -w /src php:8.2-cli php tests/security_regression
 
 The plugin must still be tested against a real Roundcube 1.7 installation;
 the regression test does not replace an integration test.
+
+## Security release 2.0.1 (2026-11-08)
+
+This fork backports protection for CVE-2026-107145 and CVE-2026-107146.
+CVE-2026-107147 was already addressed by using only `REMOTE_ADDR` for IP
+whitelisting (forwarded headers remain untrusted).
+
+- Failed OTP/recovery-code attempts impose per-account cooldowns of 1, 2, 5,
+  20, 60, 300 and then 600 seconds. Counters survive logout and IP changes;
+  verification and updates are serialized with a file lock. Success resets
+  the counter; penalties expire after 24 hours without an evaluated attempt.
+- Every rejected login code destroys the server-side Roundcube session and
+  clears the remember-device cookie before redirecting to the login screen.
+- A startup gate protects action handlers (including AJAX) before successful
+  2FA. The enrollment-code endpoint requires an authenticated user, a valid
+  request token, an explicit secret, and completed 2FA when already enabled.
+- Unavailable or corrupt rate-limit storage denies verification.
+
+The rate-limit directory defaults to `temp_dir/twofactor-rate-limit`; it must
+be private, writable by PHP, outside the public document root, and persistent
+across container recreation. Override it with `twofactor_rate_limit_dir`.
+Multiple PHP replicas must share the same storage with working `flock`
+semantics. Back up this directory; clearing it resets all throttles. Do not
+routinely delete it with temporary-file cleanup. Individual state files may
+be removed by an administrator to recover from corrupted state.
+
+Run both regression suites:
+
+```sh
+php tests/security_regression.php
+php tests/auth_security.php
+```
+
+Upstream advisory: https://cert.pl/en/posts/2026/10/CVE-2026-107145/
+
+## Roundcube 1.7.5 compatibility
+
+The current plugin (version 2.0.0) was checked against Roundcube 1.7.5
+with PHP 8.2.35 on 2026-11-08. No plugin code changes were required for API compatibility; see the
+subsequent 2.0.1 security fixes above.
+The security regression test passed, along with targeted tests using the
+actual Roundcube API and an in-memory test user:
+
+- plugin loading;
+- valid TOTP acceptance and invalid/non-decimal TOTP rejection;
+- strict recovery-code matching and one-time consumption;
+- access through the page gate after successful 2FA verification.
+
+Existing users' 2FA preferences were unchanged after the Roundcube upgrade.
+These checks did not include an interactive login with a real mailbox and
+an authenticator app, and do not constitute a complete security audit.
 
 ## Isolated Roundcube 1.7.1 test environment
 
