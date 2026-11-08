@@ -62,6 +62,15 @@ assert_true(
     'Remember-device token does not use cryptographically secure randomness'
 );
 assert_true(
+    strpos($plugin, 'sprintf("%d:%s:%s", $expires, $rand, $signature)') !== false,
+    'Remember-device token is coerced from a string to an integer'
+);
+assert_true(
+    strpos($plugin, "Store the HMAC as hex") !== false &&
+    strpos($plugin, "hash_hmac('sha512'") !== false,
+    'Remember-device token stores a raw binary HMAC that can contain delimiters'
+);
+assert_true(
     strpos($plugin, 'hash_equals($signature_verification, $signature)') !== false,
     'Remember-device cookie does not use constant-time verification'
 );

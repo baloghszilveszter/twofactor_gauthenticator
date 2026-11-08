@@ -8,7 +8,7 @@
   "homepage": "https://github.com/baloghszilveszter/twofactor_gauthenticator",
   "type": "roundcube-plugin",
   "license": "MIT",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "authors": [
     {
       "name": "Camilo Lozano III",

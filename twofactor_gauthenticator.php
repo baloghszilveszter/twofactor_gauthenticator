@@ -4,7 +4,7 @@
  *
  * This RoundCube plugin adds the 2-step verification(OTP) to the login proccess
  *
- * @version 2.0.0
+ * @version 2.0.1
  * @author Alexandre Espinosa <aemenor@gmail.com>
  *
  * Some ideas and code: Ricardo Signes <rjbs@cpan.org>, Ricardo Iván Vieitez Parra (https://github.com/corrideat), Justin Buchanan (https://github.com/jusbuc2k)
@@ -14,6 +14,7 @@
 require_once 'PHPGangsta/GoogleAuthenticator.php';
 
 require_once 'CIDR.php';
+require_once __DIR__ . '/TwofactorRateLimiter.php';
 
 /**
  * Class twofactor_gauthenticator
@@ -57,6 +58,7 @@ class twofactor_gauthenticator extends rcube_plugin
 
         // hooks
         $this->add_hook('login_after', array($this, 'login_after'));
+        $this->add_hook('startup', array($this, 'check_2FAstartup'));
         $this->add_hook('send_page', array($this, 'check_2FAlogin'));
         $this->add_hook('render_page', array($this, 'popup_msg_enrollment'));
 
@@ -85,8 +87,8 @@ class twofactor_gauthenticator extends rcube_plugin
         $this_output = $this->api->output;
         if ($this_output) {
             $this->api->output->set_env('allow_save_device', $rcmail->config->get('allow_save_device', true));
-            // default as 7 days to remember the device
             $this->api->output->set_env('days_to_remember_device', $rcmail->config->get('days_to_remember_device', 7));
+            $this->api->output->set_env('remember_device_options', $this->__rememberDeviceOptions());
             $this->api->output->set_env('twofactor_formfield_as_password', $rcmail->config->get('twofactor_formfield_as_password', false));
         }
     }
@@ -181,6 +183,7 @@ class twofactor_gauthenticator extends rcube_plugin
      */
     function login_after($args)
     {
+        unset($_SESSION['twofactor_gauthenticator_2FA_login']);
         $_SESSION['twofactor_gauthenticator_login'] = time();
 
         $rcmail = rcmail::get_instance();
@@ -215,6 +218,17 @@ class twofactor_gauthenticator extends rcube_plugin
      * @param $p
      * @return mixed
      */
+    // Gate all authenticated requests before action handlers, including AJAX.
+    function check_2FAstartup($args)
+    {
+        $rcmail = rcmail::get_instance();
+        if ($rcmail->user->ID && !in_array($rcmail->task, array('login', 'logout'), true)
+            && empty($_SESSION['twofactor_gauthenticator_2FA_login'])) {
+            $this->check_2FAlogin($args);
+        }
+        return $args;
+    }
+
     function check_2FAlogin($p)
     {
         $rcmail = rcmail::get_instance();
@@ -237,14 +251,18 @@ class twofactor_gauthenticator extends rcube_plugin
             $code = rcube_utils::get_input_value('_code_2FA', rcube_utils::INPUT_POST);
             $remember = rcube_utils::get_input_value('_remember_2FA', rcube_utils::INPUT_POST);
 
-            if ($code) {
-                if (self::__checkCode($code) || self::__isRecoveryCode($code)) {
+            if ($code !== null) {
+                if (!$rcmail->check_request()) {
+                    $this->__exitSession();
+                }
+                if ($this->__verifyLoginCode($code)) {
                     if (self::__isRecoveryCode($code)) {
                         self::__consumeRecoveryCode($code);
                     }
 
                     if (rcube_utils::get_input_value('_remember_2FA', rcube_utils::INPUT_POST) === 'yes') {
-                        $this->__cookie($set = true);
+                        $remember_days = (int) rcube_utils::get_input_value('_remember_2FA_days', rcube_utils::INPUT_POST);
+                        $this->__cookie($set = true, $remember_days);
                     }
 
                     $this->__goingRoundcubeTask('mail');
@@ -328,7 +346,7 @@ class twofactor_gauthenticator extends rcube_plugin
 		//
 		// Solution: if user don't have session created by any rendered page, we kick out
 		$config_2FA = self::__get2FAconfig();
-		if(!$_SESSION['twofactor_gauthenticator_2FA_login'] && $config_2FA['activate']) {
+		if (!$rcmail->user->ID || (empty($_SESSION['twofactor_gauthenticator_2FA_login']) && !empty($config_2FA['activate']))) {
 			$this->__exitSession();
 		}
         
@@ -503,10 +521,18 @@ class twofactor_gauthenticator extends rcube_plugin
     // used with ajax
     function checkCode()
     {
+        $rcmail = rcmail::get_instance();
+        $prefs = self::__get2FAconfig();
+        // This endpoint only tests an explicitly supplied enrollment secret.
+        // It must never act as an oracle for the saved secret before 2FA login.
+        if (!$rcmail->user->ID || !$rcmail->check_request() || (!empty($prefs['activate'])
+            && empty($_SESSION['twofactor_gauthenticator_2FA_login']))) {
+            $this->__exitSession();
+        }
         $code = rcube_utils::get_input_value('code', rcube_utils::INPUT_POST);
         $secret = rcube_utils::get_input_value('secret', rcube_utils::INPUT_POST);
 
-        if (self::__checkCode($code, $secret)) {
+        if (is_string($secret) && $secret !== '' && self::__checkCode($code, $secret)) {
             echo $this->gettext('code_ok');
         } else {
             echo $this->gettext('code_ko');
@@ -531,8 +557,34 @@ class twofactor_gauthenticator extends rcube_plugin
         unset($_SESSION['twofactor_gauthenticator_2FA_login']);
 
         $rcmail = rcmail::get_instance();
-        header('Location: ?_task=logout&_token=' . $rcmail->get_request_token());
+        $name = hash_hmac('md5', $rcmail->user->data['username'] ?? '', $rcmail->config->get('des_key'));
+        rcube_utils::setcookie($name, '', time() - 3600);
+        // Destroy the server-side session before sending any redirect.
+        $rcmail->kill_session();
+        header('Location: ?_task=login');
         exit;
+    }
+
+    private function __verifyLoginCode($code)
+    {
+        $rcmail = rcmail::get_instance();
+        try {
+            $directory = $rcmail->config->get('twofactor_rate_limit_dir',
+                rtrim($rcmail->config->get('temp_dir', sys_get_temp_dir()), '/') . '/twofactor-rate-limit');
+            $limiter = new TwofactorRateLimiter($directory);
+            // Stable user ID includes the Roundcube installation; IP changes cannot reset it.
+            $account = INSTALL_PATH . ':' . $rcmail->user->ID;
+            if (!$rcmail->user->ID) {
+                return false;
+            }
+            return $limiter->verify($account, function () use ($code) {
+                return is_string($code) && (self::__checkCode($code) || self::__isRecoveryCode($code));
+            });
+        } catch (Throwable $e) {
+            // Fail closed on unavailable/corrupt storage; never log codes or secrets.
+            rcube::write_log('errors', '2FA verification denied: rate-limit storage unavailable');
+            return false;
+        }
     }
 
     private function __get2FAconfig()
@@ -611,7 +663,23 @@ class twofactor_gauthenticator extends rcube_plugin
 
 
     // remember option by https://github.com/corrideat/
-    private function __cookie($set = TRUE)
+    private function __rememberDeviceOptions()
+    {
+        $rcmail = rcmail::get_instance();
+        $options = $rcmail->config->get('remember_device_options', array(7, 30, 180));
+        if (!is_array($options)) {
+            $options = array(7, 30, 180);
+        }
+
+        $options = array_values(array_unique(array_filter(array_map('intval', $options), function ($days) {
+            return $days >= 1 && $days <= 180;
+        })));
+        sort($options, SORT_NUMERIC);
+
+        return $options ?: array(7);
+    }
+
+    private function __cookie($set = TRUE, $remember_days = null)
     {
         $rcmail = rcmail::get_instance();
         $user_agent = hash_hmac('md5', filter_input(INPUT_SERVER, 'USER_AGENT') ?: "\0\0\0\0\0", $rcmail->config->get('des_key'));
@@ -619,14 +687,26 @@ class twofactor_gauthenticator extends rcube_plugin
         $iv = hash_hmac('md5', implode("\3\2\3", array($rcmail->user->data['username'], $this->__getSecret())), $rcmail->config->get('des_key'), TRUE);
         $name = hash_hmac('md5', $rcmail->user->data['username'], $rcmail->config->get('des_key'));
 
-        // 7 days * hours of a day * an hour
-        $days2remember_device = (int)$rcmail->config->get('days_to_remember_device') * 24 * 3600;
+        $remember_options = $this->__rememberDeviceOptions();
+        $default_days = (int)$rcmail->config->get('days_to_remember_device', 7);
+        if (!in_array($default_days, $remember_options, true)) {
+            $default_days = $remember_options[0];
+        }
+        $days2remember_device = $set && in_array((int)$remember_days, $remember_options, true)
+            ? (int)$remember_days
+            : $default_days;
+        $days2remember_device *= 24 * 3600;
 
         if ($set) {
             $expires = time() + $days2remember_device; // 30 days from now
             $rand = bin2hex(random_bytes(16));
-            $signature = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'), TRUE);
-            $plain_content = sprintf("%d:%d:%s", $expires, $rand, $signature);
+            // Store the HMAC as hex so the colon-delimited token cannot be
+            // corrupted by delimiter bytes from a raw binary signature.
+            $signature = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'));
+            // Keep the cryptographically random token intact. It is a
+            // hexadecimal string and must not be coerced to an integer,
+            // otherwise the signature cannot be verified on the next login.
+            $plain_content = sprintf("%d:%s:%s", $expires, $rand, $signature);
             $encrypted_content = openssl_encrypt($plain_content, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
             if ($encrypted_content !== false) {
                 $b64_encrypted_content = strtr(base64_encode($encrypted_content), '+/=', '-_,');
@@ -643,8 +723,9 @@ class twofactor_gauthenticator extends rcube_plugin
                     if ($plain_content !== false) {
                         $now = time();
                         list($expires, $rand, $signature) = explode(':', $plain_content, 3);
-                        if ($expires > $now && ($expires - $now) <= $days2remember_device) {
-                            $signature_verification = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'), TRUE);
+                        $max_days = max($remember_options) * 24 * 3600;
+                        if ($expires > $now && ($expires - $now) <= $max_days) {
+                            $signature_verification = hash_hmac('sha512', implode("\1\0\1", array($rcmail->user->data['username'], $this->__getSecret(), $user_agent, $rand, $expires)), $rcmail->config->get('des_key'));
                             return hash_equals($signature_verification, $signature);
                         }
                     }

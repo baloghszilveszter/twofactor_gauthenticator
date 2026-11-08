@@ -36,6 +36,7 @@ $labels['code_ok'] = 'Code OK';
 $labels['code_ko'] = 'Incorrect code';
 
 $labels['dont_ask_me_days'] = 'Don&#39;t ask me codes again on this computer for {DAYS} days';
+$labels['remember_device_for'] = 'Remember this device for:';
 
 $labels['check_code_to_activate'] = 'To save, please scan the QR Code and enter the current 2-Factor code below.';
 
@@ -46,4 +47,3 @@ $labels['proceed'] = 'Proceed';
 // Messages used for the different portions of the plugin
 $messages = array();
 $messages['successfully_saved'] = '2-Factor authentication settings saved successfully.';
-
